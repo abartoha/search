@@ -10,10 +10,10 @@ from PyQt5 import QtGui, QtWidgets
 def search_json(data, query, selected_genres):
     results = []
     for item in data:
-        if (
-            fuzz.partial_ratio(query.lower(), item['title'].lower()) >= 70
-            or any(fuzz.partial_ratio(query.lower(), tag.lower()) >= 70 for tag in item['genre'])
-        ):
+        if query.lower() == "":
+            if all(genre in item['genre'] for genre in selected_genres):
+                results.append(item)
+        elif fuzz.partial_ratio(query.lower(), item['title'].lower()) >= 70:
             if all(genre in item['genre'] for genre in selected_genres):
                 results.append(item)
     return results
@@ -113,9 +113,9 @@ class SearchApp(QWidget):
                         self, "Details", 
                         f"Title: {result['title']}\n"
                         f"Date: {result['date']}\n"
-                        f"Download Links: {', '.join(result['download_links'])}\n"
+                        # f"Download Links: {', '.join(result['download_links'])}\n"
                         f"Genres: {', '.join(result['genre'])}\n"
-                        f"Features: {', '.join(result['features'])}"
+                        # f"Features: {', '.join(result['features'])}"
                     )
                     break
 
