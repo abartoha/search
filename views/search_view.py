@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QLineEdit, QPushButton, QListWidget,
-    QMessageBox, QMenuBar, QAction
+    QMessageBox, QMenuBar, QAction, QCompleter, QDialog
 )
 from PyQt5.QtCore import Qt
 from views.components import CheckableComboBox, ProgressIndicator, SettingsDialog
@@ -29,6 +29,7 @@ class SearchApp(QWidget):
         # UI Elements
         self.search_box = QLineEdit(self)
         self.search_box.setPlaceholderText("Enter search query (supports regex)")
+
         self.search_button = QPushButton("Search", self)
         self.result_list = QListWidget(self)
         self.genre_combobox = CheckableComboBox(self)
@@ -37,6 +38,11 @@ class SearchApp(QWidget):
             self.genre_combobox.add_item(genre)
 
         self.progress = ProgressIndicator(parent=self)
+
+        # Autocomplete setup
+        self.autocomplete = QCompleter([item["title"] for item in self.data], self)
+        self.autocomplete.setCaseSensitivity(Qt.CaseInsensitive)
+        self.search_box.setCompleter(self.autocomplete)
 
         # Layout
         layout = QVBoxLayout(self)
@@ -58,7 +64,13 @@ class SearchApp(QWidget):
         self.search_button.clicked.connect(self.start_search)
         self.result_list.itemDoubleClicked.connect(self.show_details)
 
+    def update_autocomplete(self):
+        """Update autocomplete suggestions based on loaded data."""
+        titles = [item["title"] for item in self.data]
+        self.autocomplete.model().setStringList(titles)  # Fixed: Ensure the model is initialized correctly
+
     def start_search(self):
+        """Start the search operation."""
         query = self.search_box.text()
         selected_genres = self.genre_combobox.get_checked_items()
 
@@ -67,10 +79,20 @@ class SearchApp(QWidget):
             return
 
         self.progress.start()
-        results = search_json(self.data, query, selected_genres)
+        try:
+            results = search_json(self.data, query, selected_genres)
+        except re.error as e:
+            self.progress.stop()
+            show_error_dialog(self, "Regex Error", f"Invalid regular expression: {str(e)}")
+            return
+
         self.progress.stop()
 
         self.result_list.clear()
+        if not results:
+            QMessageBox.information(self, "No Results", "No results found.")
+            return
+
         for result in results:
             self.result_list.addItem(result["title"])
 
@@ -78,14 +100,32 @@ class SearchApp(QWidget):
         title = item.text()
         for entry in self.data:
             if entry["title"] == title:
-                QMessageBox.information(
-                    self, "Details",
+                download_links = ", ".join(entry.get("download_links", []))  # Safely handle missing download links
+
+                # Prepare the details message
+                details_message = (
                     f"Title: {entry['title']}\n"
                     f"Date: {entry['date']}\n"
                     f"Genres: {', '.join(entry['genre'])}\n"
                 )
+
+                if download_links:
+                    details_message += f"Download Links: {download_links}\n"  # Add download links to message
+                else:
+                    details_message += "Download Links: None available\n"  # Show message if no links are present
+
+                # Display the details in a message box
+                QMessageBox.information(self, "Details", details_message)
                 break
 
+
     def open_settings(self):
-        dialog = SettingsDialog(self.app, self)
-        dialog.exec_()
+        """Open the settings dialog."""
+        dialog = SettingsDialog(app=self.app, parent=self)
+        if dialog.exec_() == QDialog.Accepted:
+            theme = dialog.theme_combo_box.currentText()
+            if theme == "Dark":
+                self.app.setStyleSheet(open('styles/dark.qss', 'r').read())
+            else:
+                self.app.setStyleSheet(open('styles/light.qss', 'r').read())
+
