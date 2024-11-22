@@ -1,51 +1,45 @@
 import json
+import re
 from fuzzywuzzy import fuzz
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLineEdit, QPushButton,
-    QListWidget, QVBoxLayout, QMessageBox, QListWidgetItem, 
-    QDialog, QComboBox, QDialogButtonBox, QLabel, QMenuBar, QAction
+    QListWidget, QVBoxLayout, QMessageBox, QListWidgetItem,
+    QDialog, QComboBox, QDialogButtonBox, QLabel, QMenuBar, QMenu,
+    QProgressDialog, QCompleter
 )
 from PyQt5.QtCore import Qt
 from PyQt5 import QtGui, QtWidgets
 from PyQt5.QtGui import QIcon
 
-def search_json(data, query, selected_genres):
+
+def search_json(data, query, selected_genres, use_regex=False):
+    """Search JSON data with support for regex and genre filtering."""
     results = []
-    for item in data:
-        if query.lower() == "":
-            if all(genre in item['genre'] for genre in selected_genres):
+    try:
+        for item in data:
+            title_match = False
+
+            # Regular expression search
+            if use_regex:
+                try:
+                    if re.search(query, item['title'], re.IGNORECASE):
+                        title_match = True
+                except re.error:
+                    raise ValueError("Invalid regular expression.")
+            # Fuzzy matching
+            elif fuzz.partial_ratio(query.lower(), item['title'].lower()) >= 70:
+                title_match = True
+
+            # Apply genre filtering
+            if title_match and all(genre in item['genre'] for genre in selected_genres):
                 results.append(item)
-        elif fuzz.partial_ratio(query.lower(), item['title'].lower()) >= 70:
-            if all(genre in item['genre'] for genre in selected_genres):
-                results.append(item)
+    except Exception as e:
+        QMessageBox.critical(None, "Error", f"An error occurred during the search: {e}")
     return results
-
-class SettingsDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Settings")
-
-        layout = QVBoxLayout()
-
-
-        # Theme selection
-        theme_label = QLabel("Choose Theme:")
-        self.theme_combo_box = QComboBox()
-        self.theme_combo_box.addItems(["Light", "Dark"])
-        layout.addWidget(theme_label)
-        layout.addWidget(self.theme_combo_box)
-
-        # Button box
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-
-
-        self.setLayout(layout)
 
 
 class CheckableComboBox(QtWidgets.QComboBox):
+    """Custom ComboBox with checkable items for multi-selection."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setModel(QtGui.QStandardItemModel(self))
@@ -59,23 +53,20 @@ class CheckableComboBox(QtWidgets.QComboBox):
 
     def handle_item_pressed(self, index):
         item = self.model().itemFromIndex(index)
-        if item.checkState() == Qt.Checked:
-            item.setCheckState(Qt.Unchecked)
-        else:
-            item.setCheckState(Qt.Checked)
+        item.setCheckState(Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked)
 
     def get_checked_items(self):
-        checked_items = []
-        for i in range(self.model().rowCount()):
-            item = self.model().item(i)
-            if item.checkState() == Qt.Checked:
-                checked_items.append(item.text())
-        return checked_items
+        return [
+            self.model().item(i).text()
+            for i in range(self.model().rowCount())
+            if self.model().item(i).checkState() == Qt.Checked
+        ]
+
 
 class SearchApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Fitgirl Offline and Better")
+        self.setWindowTitle("Enhanced Search App")
         self.resize(600, 400)
 
         # Load JSON data
@@ -89,25 +80,35 @@ class SearchApp(QWidget):
             QMessageBox.critical(self, "Error", "Invalid JSON data in data.json.")
             exit()
 
-        # Extract unique genres from the data
+        # Extract unique genres and titles for autocomplete
         self.genres = sorted(set(genre for item in self.data for genre in item['genre']))
+        self.titles = [item['title'] for item in self.data]
 
-        # Create UI elements
+        # UI elements
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Enter search query")
         self.search_button = QPushButton("Search")
         self.result_list = QListWidget()
 
-        # Create genre filter combobox
+        # Autocomplete for search box
+        completer = QCompleter(self.titles, self)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self.search_box.setCompleter(completer)
+
+        # Genre filter combobox
         self.genre_combobox = CheckableComboBox()
-        self.genre_combobox.addItem("All Genres")  # Default item
+        self.genre_combobox.add_item("All Genres")
         for genre in self.genres:
             self.genre_combobox.add_item(genre)
+
+        # Regex checkbox
+        self.use_regex_checkbox = QtWidgets.QCheckBox("Use Regular Expression")
 
         # Layout
         layout = QVBoxLayout()
         layout.addWidget(self.search_box)
         layout.addWidget(self.genre_combobox)
+        layout.addWidget(self.use_regex_checkbox)
         layout.addWidget(self.search_button)
         layout.addWidget(self.result_list)
         self.setLayout(layout)
@@ -116,30 +117,32 @@ class SearchApp(QWidget):
         self.search_button.clicked.connect(self.search)
         self.result_list.itemDoubleClicked.connect(self.show_details)
 
-       
-
-    def show_settings_dialog(self):
-        dialog = SettingsDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
-            theme = dialog.theme_combo_box.currentText()
-            if theme == "Dark":
-                self.setStyleSheet(dark_style_sheet)
-            else:
-                self.setStyleSheet("")  # Reset to default style
-
     def search(self):
         query = self.search_box.text()
         selected_genres = self.genre_combobox.get_checked_items()
+        use_regex = self.use_regex_checkbox.isChecked()
 
         if "All Genres" in selected_genres:
-            selected_genres = []  # Ignore genre filtering if "All Genres" is selected
+            selected_genres = []
 
-        results = search_json(self.data, query, selected_genres)
+        # Progress dialog
+        progress_dialog = QProgressDialog("Searching...", "Cancel", 0, 0, self)
+        progress_dialog.setWindowTitle("Please Wait")
+        progress_dialog.setWindowModality(Qt.WindowModal)
+        progress_dialog.show()
+
+        # Perform search
+        results = search_json(self.data, query, selected_genres, use_regex)
+
+        progress_dialog.close()
+
+        # Display results
         self.result_list.clear()
-
-        for result in results:
-            item = QListWidgetItem(result['title'])
-            self.result_list.addItem(item)
+        if results:
+            for result in results:
+                self.result_list.addItem(QListWidgetItem(result['title']))
+        else:
+            QMessageBox.information(self, "No Results", "No results found for your query.")
 
     def show_details(self):
         selected_item = self.result_list.currentItem()
@@ -148,19 +151,17 @@ class SearchApp(QWidget):
             for result in self.data:
                 if result['title'] == item_text:
                     QMessageBox.information(
-                        self, "Details", 
+                        self, "Details",
                         f"Title: {result['title']}\n"
-                        f"Date: {result['date']}\n"
-                        # f"Download Links: {', '.join(result['download_links'])}\n"
+                        f"Date: {result.get('date', 'N/A')}\n"
                         f"Genres: {', '.join(result['genre'])}\n"
-                        # f"Features: {', '.join(result['features'])}"
+                        f"Features: {', '.join(result.get('features', []))}"
                     )
                     break
 
+
 if __name__ == '__main__':
     app = QApplication([])
-    app.setStyleSheet(open('dark_style.qss').read())
-    app.setStyleSheet(open('style.qss').read())
     app.setWindowIcon(QIcon('icon.ico'))
     window = SearchApp()
     window.show()
